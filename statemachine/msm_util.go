@@ -146,13 +146,6 @@ func (m *MSM) transition(dst string, eventName string, async bool) error {
 				return err
 			}
 
-			m.eventMu.Unlock()
-			unlocked = true
-			m.inTransition = false
-
-			if m.Can(NEXT) {
-				m.transit(NEXT, false)
-			}
 		} else {
 			go func() error {
 				err := fn(e)
@@ -169,13 +162,17 @@ func (m *MSM) transition(dst string, eventName string, async bool) error {
 
 				return nil
 			}()
+			return nil
 		}
-	} else {
-		m.eventMu.Unlock()
-		unlocked = true
-		m.inTransition = false
 	}
 
+	m.eventMu.Unlock()
+	unlocked = true
+	m.inTransition = false
+
+	if m.Can(NEXT) {
+		m.transit(NEXT, false)
+	}
 	return nil
 }
 
