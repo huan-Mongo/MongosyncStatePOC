@@ -107,7 +107,7 @@ func newPhases(m *MongoSync) *statemachine.MSM {
 				l.Println("current Phase: ", m.phases.Current())
 				l.Println("call ms.initializeAllPartitions(ctx)")
 				if err := processForOneSec(&m.ctx); err != nil {
-					m.state.Transit("stopped")
+					m.state.Transit("stopped", false)
 					return err
 				}
 				m.resumePhase = m.phases.Current()
@@ -120,7 +120,7 @@ func newPhases(m *MongoSync) *statemachine.MSM {
 				l.Println("call ms.runCollectionCopy(ctx)")
 				m.resumePhase = m.phases.Current()
 				if err := processForOneSec(&m.ctx); err != nil{
-					m.state.Transit("stopped")
+					m.state.Transit("stopped", false)
 					return err
 				}
 				return nil
@@ -131,7 +131,7 @@ func newPhases(m *MongoSync) *statemachine.MSM {
 				l.Println("current Phase: ", m.phases.Current())
 				l.Println("call ms.CaptureChangeData(ctx)")
 				if err := processForOneSec(&m.ctx); err != nil {
-					m.state.Transit("stopped")
+					m.state.Transit("stopped", false)
 					return err
 				}
 				m.resumePhase = m.phases.Current()
@@ -148,7 +148,7 @@ func newPhases(m *MongoSync) *statemachine.MSM {
 				l.Println("current state: ", m.state.Current())
 				l.Println("current Phase: ", m.phases.Current())
 				m.resumePhase = m.phases.Current()
-				m.state.Transit("cutOverDone")
+				m.state.Transit("cutOverDone", false)
 				return nil
 			},
 		},
@@ -177,14 +177,10 @@ func newState(m *MongoSync) *statemachine.MSM {
 
 				if m.resumeState != "" {
 					l.Println("found resume data, current phase ", m.resumePhase)
-					go func() {
-						m.phases.SetState(m.resumePhase)
-					}()
+					m.phases.SetState(m.resumePhase, true)
 				} else {
 					l.Println("found no resume data")
-					go func() {
-						m.phases.Transit("start")
-					}()
+					m.phases.Transit("start", true)
 				}
 				return nil
 			},
@@ -198,9 +194,7 @@ func newState(m *MongoSync) *statemachine.MSM {
 				l.Println("current state", m.state.Current())
 
 				if e.Name == "_set_state" {
-					go func() {
-						m.phases.SetState(m.resumePhase)
-					}()
+					m.phases.SetState(m.resumePhase, true)
 				}
 				return nil
 			},
@@ -228,7 +222,7 @@ func main() {
 	}
 	m.ctx, m.cancel = context.WithCancel(context.Background())
 
-	pause := false
+	pause := true
 	abort := false
 	restart := true
 	resumePhase := PartitionPrep
@@ -239,12 +233,12 @@ func main() {
 	fmt.Println(m.phases.GenerateDiagram())
 	fmt.Println(m.state.GenerateDiagram())
 
-	if err:= m.phases.SetState(Initiating); err != nil {
+	if err:= m.phases.SetState(Initiating, false); err != nil {
 		fmt.Println(err)
 	}
 
 	if !restart {
-		err := m.state.Transit("start")
+		err := m.state.Transit("start", true)
 		l.Println("done start command")
 		if err != nil {
 			fmt.Println(err)
@@ -253,7 +247,7 @@ func main() {
 		m.resumePhase = resumePhase
 		m.resumeState = Running
 		l.Printf("recovered, resuming state: %s, phase: %s", m.resumeState, m.resumePhase)
-		err := m.state.SetState(m.resumeState)
+		err := m.state.SetState(m.resumeState, true)
 		if err != nil {
 			fmt.Println(err)
 		}
@@ -262,7 +256,7 @@ func main() {
 	if pause {
 		time.Sleep(2500 * time.Millisecond)
 		fmt.Println("sent pause")
-		m.state.Transit("pause")
+		m.state.Transit("pause", false)
 
 		for {
 			if m.state.Current() == Paused{
@@ -274,18 +268,18 @@ func main() {
 	if abort {
 		time.Sleep(2500 * time.Millisecond)
 		fmt.Println("sent abort")
-		m.state.Transit("abort")
+		m.state.Transit("abort", true)
 	}
 
 	l.Println("send resume command")
-	err := m.state.Transit("resume")
+	err := m.state.Transit("resume", true)
 	if err != nil {
 		l.Println(err.Error())
 	}
 	l.Println("done resume command")
 
 	time.Sleep(10* time.Second)
-	m.state.Transit("cutOver")
+	m.state.Transit("cutOver", true)
 	time.Sleep(3 * time.Second)
 	l.Println("final state: ", m.state.Current())
 	l.Println("final phase: ", m.phases.Current())

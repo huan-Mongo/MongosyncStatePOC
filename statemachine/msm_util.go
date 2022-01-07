@@ -94,8 +94,8 @@ func (m *MSM) Current() string {
 
 // SetState allows the user to move to the given state from current state and
 // trigger any callbacks, if defined.
-func (m *MSM) SetState(state string) error {
-	return m.transition(state, "_set_state")
+func (m *MSM) SetState(state string, async bool) error {
+	return m.transition(state, "_set_state", async)
 }
 
 // Can returns true if event can occur in the current state.
@@ -110,7 +110,7 @@ func (m *MSM) Can(event string) bool {
 }
 
 
-func (m *MSM) transition(dst string, eventName string) error {
+func (m *MSM) transition(dst string, eventName string, async bool) error {
 	if m.inTransition {
 		return InTransitionError{eventName}
 	}
@@ -118,17 +118,13 @@ func (m *MSM) transition(dst string, eventName string) error {
 	m.eventMu.Lock()
 	var unlocked bool
 	defer func() {
-		if !unlocked {
+		if !unlocked && !async {
 			m.eventMu.Unlock()
 		}
 	}()
 
 	m.stateMu.RLock()
 	defer m.stateMu.RUnlock()
-
-	if m.inTransition {
-		return InTransitionError{eventName}
-	}
 
 	e := &Event{eventName, m.current, dst, ""}
 
@@ -143,25 +139,47 @@ func (m *MSM) transition(dst string, eventName string) error {
 	m.stateMu.Unlock()
 
 	if fn, ok := m.callbacks[m.current]; ok {
-		if err := fn(e); err  != nil {
-			// exit if the current callback returns error. Won't proceed the other implicit transitions.
+		if !async {
+			if err := fn(e); err != nil {
+				// exit if the current callback returns error. Won't proceed the other implicit transitions.
+				m.inTransition = false
+				return err
+			}
+
+			m.eventMu.Unlock()
+			unlocked = true
 			m.inTransition = false
-			return err
+
+			if m.Can(NEXT) {
+				m.transit(NEXT, false)
+			}
+		} else {
+			go func() error {
+				err := fn(e)
+				// exit if the current callback returns error. Won't proceed the other implicit transitions.
+				m.eventMu.Unlock()
+				unlocked = true
+				m.inTransition = false
+
+				if err == nil {
+					if m.Can(NEXT) {
+						m.transit(NEXT, false)
+					}
+				}
+
+				return nil
+			}()
 		}
-	}
-
-	m.eventMu.Unlock()
-	unlocked = true
-	m.inTransition = false
-
-	if m.Can(NEXT) {
-		return m.transit(NEXT)
+	} else {
+		m.eventMu.Unlock()
+		unlocked = true
+		m.inTransition = false
 	}
 
 	return nil
 }
 
-func (m *MSM) transit(eventName string) error {
+func (m *MSM) transit(eventName string, async bool) error {
 	var dst string
 	v, ok := m.states[m.current]
 	if ok {
@@ -172,15 +190,15 @@ func (m *MSM) transit(eventName string) error {
 		return InvalidEventError{eventName, m.current}
 	}
 
-	return m.transition(dst, eventName)
+	return m.transition(dst, eventName, async)
 }
 
-func (m *MSM) Transit(eventName string) error {
+func (m *MSM) Transit(eventName string, async bool) error {
 	if eventName == NEXT {
 		return InvalidEventError{eventName, m.current}
 	}
 
-	return m.transit(eventName)
+	return m.transit(eventName, async)
 }
 
 func (m *MSM) GenerateDiagram()  string {
