@@ -1,0 +1,16 @@
+@startuml
+    [*] --> Initiating
+    ChangeStreamCapture --> CutOverDone
+    ChangeStreamCapture: Call CaptureChangeData
+    CutOverDone --> [*]
+    CutOverDone: Done
+    Initiating --> Initiated
+    Initiated --> CollectionAndIndexCreation: start
+    Initiated: waiting for start command
+    CollectionAndIndexCreation --> PartitionPrep
+    CollectionAndIndexCreation: Call fetchStartAtOperationTime to get initial cluster time, Call initializeCollections
+    PartitionPrep --> CollectionDataCopy
+    PartitionPrep: Call initializeAllPartitions
+    CollectionDataCopy --> ChangeStreamCapture
+    CollectionDataCopy: Call runCollectionCopy
+@enduml

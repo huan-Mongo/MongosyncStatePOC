@@ -1,0 +1,12 @@
+@startuml
+'https://plantuml.com/sequence-diagram
+    [*] --> Initializing
+    CollectionAndIndexCreation --> PartitionPrep: next
+    CollectionDataCopy --> UnstableChangeStreamCapture: next
+    Initializing --> Initiated: next
+    Initiated --> CollectionAndIndexCreation: next
+    PartitionPrep --> CollectionDataCopy: next
+    UnstableChangeStreamCapture --> ChangeStreamCapture: next
+
+
+@enduml

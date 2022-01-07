@@ -1,0 +1,189 @@
+@startuml
+namespace mongosync {
+    class ChangeStreamDispatcher << (S,Aquamarine) >> {
+        - options *DispatcherOptions
+        - bufferedEventCh <font color=blue>chan</font> bson.Raw
+        - writers []Writer
+        - writerGroup *errgroup.Group
+        - dispatchedEvents int
+        - lastEventType EventType
+        - hashFunc Hasher
+
+        - dispatchChangeEvent(ctx context.Context, event bson.Raw) error
+        - waitForBatchIfNeeded(ctx context.Context, writerIdx int, eventType EventType) error
+        - startWriters(ctx context.Context) 
+        - waitForWritersExit() error
+        - shouldWaitForBatch(writerIdx int, eventType EventType) bool
+        - getMaxEventsPerBatch() int
+        - getMaxBytesPerWriter() int
+        - getMaxEventsPerWriter() int
+
+        + Start(ctx context.Context) error
+
+    }
+    class ChangeStreamReader << (S,Aquamarine) >> {
+        - srcClient *mongo.Client
+        - bufferedEventCh <font color=blue>chan</font> bson.Raw
+        - startAtTs *primitive.Timestamp
+        - resumeToken <font color=blue>interface</font>{}
+
+        + Watch(ctx context.Context) (*mongo.ChangeStream, error)
+        + Start(ctx context.Context) error
+
+    }
+    class ClusterWriter << (S,Aquamarine) >> {
+        - writerCh <font color=blue>chan</font> bson.Raw
+        - threadID int
+        - destClient *mongo.Client
+        - resumeData resumedata.ResumeInterface
+        - inserter *bbi.BufferedBulkInserter
+        - flushTimeout time.Duration
+        - stats WriterStats
+
+        - writeToDestinationCluster(ctx context.Context, event bson.Raw) error
+        - flushInserter(ctx context.Context) error
+        - resetCollection(ctx context.Context, coll *mongo.Collection) error
+        - insert(ctx context.Context, doc bson.Raw) error
+        - applyEvent(ctx context.Context, client *mongo.Client, event bson.Raw) error
+        - onInsertEvent(ctx context.Context, client *mongo.Client, event *ParsedEvent) error
+        - onReplaceEvent(ctx context.Context, client *mongo.Client, event *ParsedEvent) error
+        - createUpdatePipeline(event *ParsedEvent) (bson.Raw, error)
+        - onUpdateEvent(ctx context.Context, client *mongo.Client, event *ParsedEvent) error
+        - onDeleteEvent(ctx context.Context, client *mongo.Client, event *ParsedEvent) error
+        - onDropEvent(ctx context.Context, client *mongo.Client, event *ParsedEvent) error
+        - onRenameEvent(ctx context.Context, client *mongo.Client, event *ParsedEvent) error
+        - onDropDatabaseEvent(ctx context.Context, client *mongo.Client, event *ParsedEvent) error
+        - checkNamespaceRemovedInResumeData(event *ParsedEvent) (bool, error)
+
+        + Start(ctx context.Context) error
+        + EnqueueEvent(event bson.Raw) 
+        + GetStats() WriterStats
+
+    }
+    class DispatcherOptions << (S,Aquamarine) >> {
+        - maxEventsPerBatch int
+        - maxBytesPerWriter int
+        - maxEventsPerWriter int
+
+    }
+    class EventType << (S,Aquamarine) >> {
+        + String() string
+
+    }
+    class HashFunc << (S,Aquamarine) >> {
+        + Hash(event bson.Raw, numWriters int) int
+
+    }
+    interface Hasher  {
+        + Hash( bson.Raw,  int) int
+
+    }
+    class MongoSync << (S,Aquamarine) >> {
+        - options Options
+        - srcClient SourceClient
+        - dstClient DestinClient
+        - resumeData *resumedata.ResumeData
+
+        - closeWriterChs(writerChs []<font color=blue>chan</font> bson.Raw) 
+        - runCollectionCopy(ctx context.Context) error
+        - parallelizePartitions(ctx context.Context, allPartitions []*collmetadata.Partition) error
+        - runPartitionCopier(ctx context.Context, partitionChan <font color=blue>chan</font> *collmetadata.Partition) error
+        - getFindCmd(partition *collmetadata.Partition) bson.D
+        - runCursorForPartition(ctx context.Context, partition *collmetadata.Partition, docChan <font color=blue>chan</font> bson.Raw) error
+        - runInserterServiceForPartition(ctx context.Context, partition *collmetadata.Partition, docChan <font color=blue>chan</font> bson.Raw, service *inserterservice.InserterService) error
+        - initializeCollections(ctx context.Context) error
+        - initializeCollectionsAndGetMetadata(ctx context.Context) (collmetadata.MetadataSlice, error)
+        - initializeAllPartitions(ctx context.Context, maxNumPartitionsPerCollection int) error
+        - getAllPartitions() ([]*collmetadata.Partition, error)
+        - getSourceClient() *mongo.Client
+        - getDestClient() *mongo.Client
+        - fetchStartAtOperationTime(ctx context.Context) (*primitive.Timestamp, error)
+
+        + CaptureChangeData(ctx context.Context) error
+        + Run() error
+        + Start() error
+
+    }
+    class Options << (S,Aquamarine) >> {
+        - sourceURI *string
+        - destinationURI *string
+        - version *bool
+        - verbosity *string
+        - includeNamespaces *[]string
+        - excludeNamespaces *[]string
+        - replicateUsersAndRoles *bool
+        - logPath *string
+        - parallelism *string
+
+    }
+    class ParsedEvent << (S,Aquamarine) >> {
+        + OpType string
+        + Ns collmetadata.Namespace
+        + DocKey bson.Raw
+        + FullDoc bson.Raw
+        + ToNs collmetadata.Namespace
+        + UpdateDescription UpdateDescription
+
+        - getUpdatedFields() bson.Raw
+        - getRemovedFields() bson.Raw
+        - getTruncatedArrays() bson.Raw
+
+    }
+    class UpdateDescription << (S,Aquamarine) >> {
+        + UpdatedFields bson.Raw
+        + RemovedFields bson.Raw
+        + TruncatedArrays bson.Raw
+
+    }
+    interface Writer  {
+        + Start( context.Context) error
+        + EnqueueEvent( bson.Raw) 
+        + GetStats() WriterStats
+
+    }
+    class WriterStats << (S,Aquamarine) >> {
+        + QueuedEvents int
+        + QueuedBytes int
+
+        + ResetStats() 
+        + EventQueued(eventSize int) 
+
+    }
+    class mongosync.Batch << (T, #FF7700) >>  {
+    }
+    class mongosync.DestinClient << (T, #FF7700) >>  {
+    }
+    class mongosync.EventType << (T, #FF7700) >>  {
+    }
+    class mongosync.SourceClient << (T, #FF7700) >>  {
+    }
+    class parsedCollOptions << (S,Aquamarine) >> {
+        + Capped *bool
+        + Collation *options.Collation
+        + DefaultIndexOptions *options.DefaultIndexOptions
+        + MaxDocuments *int64
+        + SizeInBytes *int64
+        + StorageEngine <font color=blue>interface</font>{}
+        + ValidationAction *string
+        + ValidationLevel *string
+        + Validator <font color=blue>interface</font>{}
+        + ExpireAfterSeconds *int64
+        + TimeSeriesOptions *options.TimeSeriesOptions
+
+    }
+    class "[]bson.Raw" as bsonRaw {
+        'This class was created so that we can correctly have an alias pointing to this name. Since it contains dots that can break namespaces
+    }
+    class "*mongo.Client" as mongoClient {
+        'This class was created so that we can correctly have an alias pointing to this name. Since it contains dots that can break namespaces
+    }
+}
+
+"mongosync.Writer" <|-- "mongosync.ClusterWriter"
+"mongosync.Hasher" <|-- "mongosync.HashFunc"
+
+"__builtin__.int32" #.. "mongosync.EventType"
+"mongosync.mongoClient" #.. "mongosync.DestinClient"
+"mongosync.mongoClient" #.. "mongosync.SourceClient"
+"mongosync.bsonRaw" #.. "mongosync.Batch"
+@enduml

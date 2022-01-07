@@ -1,0 +1,17 @@
+@startuml
+    [*] --> Idle
+    Pausing --> Paused: stopped
+    Resuming --> Running
+    CutOverCompleted --> [*]
+    Aborting --> Aborted: stopped
+    Aborted --> [*]
+    Idle --> Running: start
+    Running --> Pausing: pause
+    Running --> CuttingOver: cutOver
+    Running --> Aborting: abort
+    Paused --> Resuming: resume
+    Paused --> Aborting: abort
+    CuttingOver --> CutOverCompleted: cutOverDone
+    CuttingOver --> Aborting: abort
+hide empty description
+@enduml
