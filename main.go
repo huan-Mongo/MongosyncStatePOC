@@ -12,7 +12,6 @@ import (
 
 type MongoSync struct {
 	state            *statemachine.MSM
-	phases           *statemachine.MSM
 	ctx              context.Context
 	cancel           context.CancelFunc
 	resumePhase      string
@@ -61,98 +60,71 @@ func processForOneSec(ctx *context.Context) error {
 	}
 }
 
-func newPhases(m *MongoSync) *statemachine.MSM {
-	return statemachine.NewMSM(
-		Initiating,
-		[]statemachine.Event{
-			{Name: statemachine.NEXT, Src: Initiating, Dst: Initiated, Desc: "waiting for start command"},
-			{Name: "start", Src: Initiated, Dst: CollectionAndIndexCreation,
-				Desc: "Call fetchStartAtOperationTime to get initial cluster time, Call initializeCollections"},
-			{Name: statemachine.NEXT, Src: CollectionAndIndexCreation, Dst: PartitionPrep, Desc: "Call initializeAllPartitions "},
-			{Name: statemachine.NEXT, Src: PartitionPrep, Dst: CollectionDataCopy, Desc: "Call runCollectionCopy"},
-			{Name: statemachine.NEXT, Src: CollectionDataCopy, Dst: ChangeStreamCapture, Desc: "Call CaptureChangeData"},
-			{Name: statemachine.NEXT, Src: ChangeStreamCapture, Dst: CutOverDone, Desc: "Done"},
-		},
-		statemachine.Callbacks{
-			Initiating: func(e *statemachine.Event) error {
-				l.Println("==================================")
-				l.Println("current state: ", m.state.Current())
-				l.Println("current Phase: ", m.phases.Current())
-
-				l.Println("loaded config data, done connecting source and destination")
-				return nil
-			},
-			Initiated: func(e *statemachine.Event) error {
-				l.Println("==================================")
-				l.Println("current state: ", m.state.Current())
-				l.Println("current Phase: ", m.phases.Current())
-				m.resumePhase = m.phases.Current()
-				return nil
-			},
-			CollectionAndIndexCreation: func(e *statemachine.Event) error {
-				l.Println("==================================")
-				l.Println("current state: ", m.state.Current())
-				l.Println("current Phase: ", m.phases.Current())
-				l.Println(" call ms.fetchStartAtOperationTime(ctx)")
-				l.Println(" call ms.initializeCollections(ctx)")
-				if err := processForOneSec(&m.ctx); err != nil {
-					return err
-				}
-				m.resumePhase = m.phases.Current()
-				return nil
-			},
-			PartitionPrep: func(e *statemachine.Event) error{
-				l.Println("==================================")
-				l.Println("current state: ", m.state.Current())
-				l.Println("current Phase: ", m.phases.Current())
-				l.Println("call ms.initializeAllPartitions(ctx)")
-				if err := processForOneSec(&m.ctx); err != nil {
-					m.state.Transit("stopped", false)
-					return err
-				}
-				m.resumePhase = m.phases.Current()
-				return nil
-			},
-			CollectionDataCopy: func(e *statemachine.Event) error {
-				l.Println("==================================")
-				l.Println("current state: ", m.state.Current())
-				l.Println("current Phase: ", m.phases.Current())
-				l.Println("call ms.runCollectionCopy(ctx)")
-				m.resumePhase = m.phases.Current()
-				if err := processForOneSec(&m.ctx); err != nil{
-					m.state.Transit("stopped", false)
-					return err
-				}
-				return nil
-			},
-			ChangeStreamCapture: func(e *statemachine.Event) error {
-				l.Println("==================================")
-				l.Println("current state: ", m.state.Current())
-				l.Println("current Phase: ", m.phases.Current())
-				l.Println("call ms.CaptureChangeData(ctx)")
-				if err := processForOneSec(&m.ctx); err != nil {
-					m.state.Transit("stopped", false)
-					return err
-				}
-				m.resumePhase = m.phases.Current()
-				for {
-					if m.state.Current() == CuttingOver {
-						time.Sleep(1 * time.Second)
-						return nil
-					}
-					time.Sleep(100 * time.Millisecond)
-				}
-			},
-			CutOverDone: func(event *statemachine.Event) error{
-				l.Println("==================================")
-				l.Println("current state: ", m.state.Current())
-				l.Println("current Phase: ", m.phases.Current())
-				m.resumePhase = m.phases.Current()
-				m.state.Transit("cutOverDone", false)
-				return nil
-			},
-		},
-	)
+// This logic is similar to what's inside Mongosync now
+func runReplication(m *MongoSync) {
+	switch m.resumePhase {
+	case Initiated:
+		l.Println("==================================")
+		l.Println("current state: ", m.state.Current())
+		l.Println("current Phase: ", m.resumePhase)
+		m.resumePhase = CollectionAndIndexCreation
+		fallthrough
+	case CollectionAndIndexCreation:
+		l.Println("==================================")
+		l.Println("current state: ", m.state.Current())
+		l.Println("current Phase: ", m.resumePhase)
+		l.Println(" call ms.fetchStartAtOperationTime(ctx)")
+		l.Println(" call ms.initializeCollections(ctx)")
+		if err := processForOneSec(&m.ctx); err != nil {
+			m.state.Transit("stopped", false)
+		}
+		m.resumePhase = PartitionPrep
+		fallthrough
+	case PartitionPrep:
+		l.Println("==================================")
+		l.Println("current state: ", m.state.Current())
+		l.Println("current Phase: ", m.resumePhase)
+		l.Println("call ms.initializeAllPartitions(ctx)")
+		if err := processForOneSec(&m.ctx); err != nil {
+			m.state.Transit("stopped", false)
+		}
+		m.resumePhase = CollectionDataCopy
+		fallthrough
+	case CollectionDataCopy:
+		l.Println("==================================")
+		l.Println("current state: ", m.state.Current())
+		l.Println("current Phase: ", m.resumePhase)
+		l.Println("call ms.runCollectionCopy(ctx)")
+		m.resumePhase = m.resumePhase
+		if err := processForOneSec(&m.ctx); err != nil{
+			m.state.Transit("stopped", false)
+		}
+		m.resumePhase = ChangeStreamCapture
+		fallthrough
+	case ChangeStreamCapture:
+		l.Println("==================================")
+		l.Println("current state: ", m.state.Current())
+		l.Println("current Phase: ", m.resumePhase)
+		l.Println("call ms.CaptureChangeData(ctx)")
+		if err := processForOneSec(&m.ctx); err != nil {
+			m.state.Transit("stopped", false)
+		}
+		fmt.Println("check cutover")
+		for {
+			if m.state.Current() == CuttingOver {
+				time.Sleep(1 * time.Second)
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		m.resumePhase = CutOverDone
+		fallthrough
+	case CutOverDone:
+		l.Println("==================================")
+		l.Println("current state: ", m.state.Current())
+		l.Println("current Phase: ", m.resumePhase)
+		m.state.Transit("cutOverDone", false)
+	}
 }
 
 func newState(m *MongoSync) *statemachine.MSM {
@@ -166,22 +138,14 @@ func newState(m *MongoSync) *statemachine.MSM {
 			{Name: statemachine.NEXT, Src: Resuming, Dst: Running},
 			{Name: "cutOver", Src: Running, Dst: CuttingOver},
 			{Name: "cutOverDone", Src: CuttingOver, Dst: CutOverCompleted},
-			{Name: "abort", Src: Paused, Dst: Aborting},
-			{Name: "abort", Src: Running,Dst: Aborting},
-			{Name: "abort", Src: CuttingOver, Dst: Aborting},
 			{Name: "stopped", Src: Aborting, Dst: Aborted},
 		},
 		statemachine.Callbacks{
 			Running: func(e *statemachine.Event) error{
 				l.Println("current event", e.Name)
-
-				if m.resumeState != "" {
-					l.Println("found resume data, current phase ", m.resumePhase)
-					m.phases.SetState(m.resumePhase, true)
-				} else {
-					l.Println("found no resume data")
-					m.phases.Transit("start", true)
-				}
+				go func() {
+					runReplication(m)
+				}()
 				return nil
 			},
 			Pausing: func(e *statemachine.Event) error {
@@ -194,7 +158,9 @@ func newState(m *MongoSync) *statemachine.MSM {
 				l.Println("current state", m.state.Current())
 
 				if e.Name == "_set_state" {
-					m.phases.SetState(m.resumePhase, true)
+					go func(){
+						runReplication(m)
+					}()
 				}
 				return nil
 			},
@@ -205,10 +171,6 @@ func newState(m *MongoSync) *statemachine.MSM {
 				l.Printf("loaded resume data, phase before pause %s, done connecting source and destination",
 					m.resumePhase)
 				m.ctx, m.cancel= context.WithCancel(context.Background())
-				return nil
-			},
-			Aborting: func(e *statemachine.Event) error {
-				m.cancel()
 				return nil
 			},
 		},
@@ -223,19 +185,20 @@ func main() {
 	m.ctx, m.cancel = context.WithCancel(context.Background())
 
 	pause := true
-	abort := false
 	restart := true
 	resumePhase := PartitionPrep
 
-	m.phases = newPhases(m)
+	m.resumePhase = Initiated
 	m.state = newState(m)
 
-	fmt.Println(m.phases.GenerateDiagram())
 	fmt.Println(m.state.GenerateDiagram())
 
-	if err:= m.phases.SetState(Initiating, false); err != nil {
-		fmt.Println(err)
-	}
+	l.Println("==================================")
+	l.Println("current state: ", m.state.Current())
+	l.Println("current Phase: ", m.resumePhase)
+
+	l.Println("loaded config data, done connecting source and destination")
+	m.resumePhase = Initiated
 
 	if !restart {
 		err := m.state.Transit("start", true)
@@ -265,12 +228,6 @@ func main() {
 		}
 	}
 
-	if abort {
-		time.Sleep(2500 * time.Millisecond)
-		fmt.Println("sent abort")
-		m.state.Transit("abort", true)
-	}
-
 	l.Println("send resume command")
 	err := m.state.Transit("resume", true)
 	if err != nil {
@@ -279,8 +236,9 @@ func main() {
 	l.Println("done resume command")
 
 	time.Sleep(10* time.Second)
+	l.Println("send cutover")
 	m.state.Transit("cutOver", true)
 	time.Sleep(3 * time.Second)
 	l.Println("final state: ", m.state.Current())
-	l.Println("final phase: ", m.phases.Current())
+	l.Println("final phase: ", m.resumePhase)
 }
